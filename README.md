@@ -2,9 +2,31 @@
 
 MiniElixir provides a safe sandbox for evaluating Elixir code with restricted functionality. It allows users to write and execute Elixir code in a controlled environment where only whitelisted functions and operators are available.
 
+## Benchmarks
+
+Run:
+
+```bash
+mix run bench/transform_bench.exs
+```
+
+Example results:
+
+```
+Name                                                    ips        average  deviation         median         99th %
+Native                                               1.14 M      876.13 ns  ±2452.00%         750 ns        1083 ns
+MiniElixir.eval/5 persistent: true (hot call)        1.02 M      979.19 ns  ±1911.87%         833 ns        1666 ns
+MiniElixir.eval/5 persistent: false               0.00016 M  6153605.28 ns     ±5.47%     6123417 ns  6954676.86 ns
+
+Comparison:
+Native                                               1.14 M
+MiniElixir.eval/5 persistent: true (hot call)        1.02 M - 1.12x slower +103.06 ns
+MiniElixir.eval/5 persistent: false               0.00016 M - 7023.61x slower +6152729.14 ns
+```
+
 ## Status & Security
 
-⚠️ This library is in **alpha** and **not ready for production**. APIs and validation rules may change. Use at your own risk.
+> ⚠️ **Alpha Status**: This library is not ready for production. APIs and validation rules may change. Use at your own risk.
 
 If you encounter any security issues or potential vulnerabilities, **please create an issue** in the GitHub repository:
 
@@ -147,79 +169,22 @@ MiniElixir validates code before it is compiled/executed. Only a specific set of
 
 Why a call is blocked: the validator resolves the call path (e.g., `File.read!(path)` → `File.read!`) and rejects it if the module/function isn’t on the allowlist, returning an error like `Forbidden function: File.read!`.
 
-## Security Features
+## Contributing
 
-MiniElixir is designed with security in mind:
+Contributions are more than welcome. Useful areas include:
 
-- **No filesystem access**: File operations are not allowed
-- **No network access**: Network operations are blocked
-- **No atom creation from strings**: Prevents atom table exhaustion
-- **No module definitions inside functions**: Prevents dynamic module creation
-- **No assignment to function arguments**: Prevents argument mutation
-- **Automatic cleanup**: Modules are deleted from VM after execution
+- **Testing**: Add unit tests and edge cases; consider property-based tests (e.g., `stream_data`) or fuzzing for the validator and transformer.
+- **Performance**: Profile and optimize hot paths; extend `bench/transform_bench.exs`; include before/after numbers in PRs where relevant.
+- **Security**: Review the allowlist, harden validation, add negative tests, and propose threat-model updates. For suspected vulnerabilities, open an issue rather than sharing public PoCs.
+- **Documentation**: Improve the README and API docs; add short guides.
+- **Examples**: Provide practical code samples and usage recipes.
 
-## Error Handling
+### How to contribute
 
-The function returns descriptive error messages for various failure cases:
+1. Fork the repository and create a feature branch.
+2. Run tests locally: `mix test`.
+3. Open a PR with a concise description and, if applicable, benchmarks or security rationale.
 
-```elixir
-# Module name mismatch
-{:error, "Module name mismatch. Expected Calculator, got Math"}
+Questions or proposals:
 
-# Function not found
-{:error, "Function add/2 not found"}
-
-# Security violation
-{:error, "Forbidden function: File.read"}
-
-# Runtime error
-{:error, "division by zero"}
-```
-
-## Benchmarks
-
-Run:
-
-```bash
-mix run bench/transform_bench.exs
-```
-
-Example results:
-
-```
-Operating System: macOS
-CPU Information: Apple M1 Pro
-Number of Available Cores: 10
-Available memory: 16 GB
-Elixir 1.18.4
-Erlang 27.3.4.2
-JIT enabled: true
-
-Benchmark suite executing with the following configuration:
-warmup: 2 s
-time: 5 s
-memory time: 0 ns
-reduction time: 0 ns
-parallel: 1
-inputs: none specified
-Estimated total run time: 21 s
-
-Benchmarking MiniElixir.eval/5 persistent: false ...
-Benchmarking MiniElixir.eval/5 persistent: true (hot call) ...
-Benchmarking Native ...
-Calculating statistics...
-Formatting results...
-
-Name                                                    ips        average  deviation         median         99th %
-Native                                               1.14 M      876.13 ns  ±2452.00%         750 ns        1083 ns
-MiniElixir.eval/5 persistent: true (hot call)        1.02 M      979.19 ns  ±1911.87%         833 ns        1666 ns
-MiniElixir.eval/5 persistent: false               0.00016 M  6153605.28 ns     ±5.47%     6123417 ns  6954676.86 ns
-
-Comparison:
-Native                                               1.14 M
-MiniElixir.eval/5 persistent: true (hot call)        1.02 M - 1.12x slower +103.06 ns
-MiniElixir.eval/5 persistent: false               0.00016 M - 7023.61x slower +6152729.14 ns
-```
-
-- Persistent hot calls are ~1.12x slower than native (module reuse, minimal overhead).
-- Non-persistent calls are ~7024x slower due to parse/validate/compile per call.
+- Issues: [github.com/sequinstream/mini_elixir/issues](https://github.com/sequinstream/mini_elixir/issues)
