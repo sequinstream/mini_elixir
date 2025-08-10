@@ -25,7 +25,8 @@ defmodule MiniElixir.MixProject do
 
   defp deps do
     [
-      {:ex_doc, "~> 0.29", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.29", only: :dev, runtime: false},
+      {:benchee, "~> 1.3", only: :dev}
     ]
   end
 
