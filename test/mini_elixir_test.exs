@@ -42,7 +42,8 @@ defmodule MiniElixirTest do
       end
       """
 
-      assert {:ok, "John Doe"} = MiniElixir.eval(code, NameFormatter, :format_name, ["john", "doe"])
+      assert {:ok, "John Doe"} =
+               MiniElixir.eval(code, NameFormatter, :format_name, ["john", "doe"])
     end
 
     test "handles complex data structures" do
@@ -58,7 +59,9 @@ defmodule MiniElixirTest do
       end
       """
 
-      assert {:ok, result} = MiniElixir.eval(code, ListProcessor, :process_list, [["banana", "apple", "cherry"]])
+      assert {:ok, result} =
+               MiniElixir.eval(code, ListProcessor, :process_list, [["banana", "apple", "cherry"]])
+
       assert result == %{1 => "APPLE", 2 => "BANANA", 3 => "CHERRY"}
     end
 
