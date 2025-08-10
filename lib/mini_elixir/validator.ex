@@ -49,7 +49,6 @@ defmodule MiniElixir.Validator do
   # defp unwrap_fnname(fnname) when fnname in @allowed_funname, do: :ok
   # allow any functions
   defp unwrap_fnname(_fnname), do: :ok
-  defp unwrap_fnname(_), do: {:error, :validator, @error_bad_toplevel}
 
   defp unwrap_params(args, acc \\ [])
 
@@ -181,6 +180,59 @@ defmodule MiniElixir.Validator do
     end
   end
 
+  # Extended check that also prevents re-binding any of the given forbidden
+  # variable names (typically, the function's parameter names)
+  def check(ast, forbidden_vars) when is_list(forbidden_vars) do
+    previous = Process.get({__MODULE__, :allowed_args})
+    Process.put({__MODULE__, :allowed_args}, MapSet.new(forbidden_vars))
+
+    result =
+      with :ok <- check(ast),
+           :ok <- ensure_no_rebind(ast, MapSet.new(forbidden_vars)) do
+        :ok
+      end
+
+    if previous == nil do
+      Process.delete({__MODULE__, :allowed_args})
+    else
+      Process.put({__MODULE__, :allowed_args}, previous)
+    end
+
+    result
+  end
+
+  defp allowed_args_set do
+    case Process.get({__MODULE__, :allowed_args}) do
+      %MapSet{} = set -> set
+      _ -> MapSet.new(@args)
+    end
+  end
+
+  defp ensure_no_rebind(ast, forbidden_set) do
+    try do
+      Macro.prewalk(ast, fn
+        {:=, _meta, [left, _right]} = node ->
+          case PatternChecker.extract_bound_vars(left) do
+            {:ok, bound} ->
+              case Enum.find(bound, fn var -> MapSet.member?(forbidden_set, var) end) do
+                nil -> node
+                bad -> throw({:error, :validator, "can't assign to argument: #{to_string(bad)}"})
+              end
+
+            {:error, _} ->
+              node
+          end
+
+        node ->
+          node
+      end)
+
+      :ok
+    catch
+      {:error, :validator, msg} -> {:error, :validator, msg}
+    end
+  end
+
   defp good({:%{}, _, body}) do
     Enum.reduce_while(body, :ok, fn
       {k, v}, :ok ->
@@ -216,14 +268,15 @@ defmodule MiniElixir.Validator do
   defp good({l, r}), do: with(:ok <- check(l), do: check(r))
   defp good({sigil, _, body}) when sigil in @kernel_sigils, do: check(body)
 
-  defp good({kernel_function, _, args}) when kernel_function in @kernel_functions, do: check_body(args)
+  defp good({kernel_function, _, args}) when kernel_function in @kernel_functions,
+    do: check_body(args)
 
   defp good({kernel_guard, _, args}) when kernel_guard in @kernel_guards, do: check_body(args)
 
   defp good({:match?, _, [l, r]}), do: with(:ok <- check(l), do: check(r))
   defp good({:defmodule, _, _}), do: {:error, :validator, "defining modules is not allowed"}
-  defp good({:def, _, _}), do: :ok
-  defp good({:defp, _, _}), do: :ok
+  defp good({:def, _, _}), do: {:error, :validator, "defining functions is not allowed"}
+  defp good({:defp, _, _}), do: {:error, :validator, "defining functions is not allowed"}
   defp good({:cond, _meta, [[{:do, body}]]}) when is_list(body), do: check_body(body)
   # Empty cond has an empty block not an empty list
   defp good({:cond, _meta, [[{:do, body}]]}), do: check(body)
@@ -253,10 +306,24 @@ defmodule MiniElixir.Validator do
   defp good({f, _, body}) when is_list(body) do
     path = dedot(f)
 
-    with :ok <- fnok(path),
-         :ok <- noinfo(path),
-         :ok <- warn_record_dot_access(path) do
-      check_body(body)
+    case path do
+      [top | _] when is_atom(top) ->
+        if MapSet.member?(allowed_args_set(), top) do
+          check_body(body)
+        else
+          with :ok <- fnok(path),
+               :ok <- noinfo(path),
+               :ok <- warn_record_dot_access(path) do
+            check_body(body)
+          end
+        end
+
+      _ ->
+        with :ok <- fnok(path),
+             :ok <- noinfo(path),
+             :ok <- warn_record_dot_access(path) do
+          check_body(body)
+        end
     end
   end
 
@@ -302,7 +369,6 @@ defmodule MiniElixir.Validator do
   end
 
   # Allowlist of remote function calls
-  defp fnok([top | _]) when top in @args, do: :ok
   defp fnok([Kernel, f]) when f in @kernel_guards or f in @kernel_functions, do: :ok
   defp fnok([Access, :get]), do: :ok
   defp fnok([Map, _]), do: :ok

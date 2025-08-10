@@ -69,37 +69,53 @@ defmodule MiniElixir do
       iex> MiniElixir.eval(code, NameFormatter, :format_name, ["john", "doe"])
       {:ok, "John Doe"}
   """
-  def eval(code, module, function, args) when is_atom(module) and is_atom(function) and is_list(args) do
-    with {:ok, ast} <- Code.string_to_quoted(code),
-         :ok <- validate_module_name(ast, module),
-        #  {:ok, module_body} <- extract_module_body(ast),
-        #  :ok <- Validator.check(module_body),
-        #  {:ok, {_fun_body, _arg_names}} <- unwrap_function(ast, function, length(args)) do
+  def eval(code, module, function, args, opts \\ [])
+      when is_atom(module) and is_atom(function) and is_list(args) and is_list(opts) do
+    persistent? = Keyword.get(opts, :persistent, true)
+    arity = length(args)
 
-         {:ok, {fun_body, _arg_names}} <- unwrap_function(ast, function, length(args)),
-         :ok <- Validator.check(fun_body) do
+    if persistent? and module_loaded?(module) and function_exported?(module, function, arity) do
       try do
-        # Only compile and execute after validation
-        Code.compiler_options(ignore_module_conflict: true)
-        Code.eval_quoted(ast)
         result = apply(module, function, args)
         {:ok, result}
       rescue
-        e ->
-          {:error, Exception.message(e)}
-      after
-        Code.compiler_options(ignore_module_conflict: false)
-        :code.purge(module)
-        :code.delete(module)
+        e -> {:error, Exception.message(e)}
       end
     else
-      {:error, reason} -> {:error, reason}
-      {:error, line, reason} -> {:error, "Line #{line}: #{reason}"}
+      with {:ok, ast} <- Code.string_to_quoted(code),
+           :ok <- validate_module_name(ast, module),
+           {:ok, {fun_body, arg_names}} <- unwrap_function(ast, function, length(args)),
+           :ok <- Validator.check(fun_body, arg_names) do
+        try do
+          # only compile and execute after validation
+          Code.compiler_options(ignore_module_conflict: true)
+          Code.eval_quoted(ast)
+          result = apply(module, function, args)
+          {:ok, result}
+        rescue
+          e ->
+            {:error, Exception.message(e)}
+        after
+          Code.compiler_options(ignore_module_conflict: false)
+
+          if not persistent? do
+            :code.purge(module)
+            :code.delete(module)
+          end
+        end
+      else
+        {:error, reason} -> {:error, reason}
+        {:error, line, reason} -> {:error, "Line #{line}: #{reason}"}
+      end
     end
   end
 
-  defp validate_module_name({:defmodule, _, [{:__aliases__, _, module_parts}, _]}, expected_module) do
+  defp validate_module_name(
+         {:defmodule, _, [{:__aliases__, _, module_parts}, _]},
+         expected_module
+       ) do
     actual_module = Module.concat(module_parts)
+
     if actual_module == expected_module do
       :ok
     else
@@ -111,40 +127,49 @@ defmodule MiniElixir do
     {:error, "Expected a module definition"}
   end
 
-  defp extract_module_body({:defmodule, _, [_, [do: body]]}) do
-    {:ok, body}
-  end
-
-  defp extract_module_body(_) do
-    {:error, "Invalid module structure"}
-  end
-
-  defp unwrap_function({:defmodule, _, [_, [do: {:__block__, _, defs}]]}, expected_name, expected_arity) do
-    # Handle multiple function definitions
+  defp unwrap_function(
+         {:defmodule, _, [_, [do: {:__block__, _, defs}]]},
+         expected_name,
+         expected_arity
+       ) do
+    # handle multiple function definitions
     Enum.find_value(defs, {:error, "Function #{expected_name}/#{expected_arity} not found"}, fn
       {:def, _, [{name, _, args}, [do: body]]} when is_list(args) ->
         if name == expected_name and length(args) == expected_arity do
           arg_names = for {name, _, _} <- args, do: name
           {:ok, {body, arg_names}}
         end
-      _ -> nil
+
+      _ ->
+        nil
     end)
   end
 
-  defp unwrap_function({:defmodule, _, [_, [do: {:def, _, [{name, _, args}, [do: body]]}]]}, expected_name, expected_arity)
+  defp unwrap_function(
+         {:defmodule, _, [_, [do: {:def, _, [{name, _, args}, [do: body]]}]]},
+         expected_name,
+         expected_arity
+       )
        when is_list(args) do
     cond do
       name != expected_name ->
         {:error, "Expected function name to be #{inspect(expected_name)}, got: #{inspect(name)}"}
+
       length(args) != expected_arity ->
         {:error, "Expected function arity to be #{expected_arity}, got: #{length(args)}"}
+
       true ->
         arg_names = for {name, _, _} <- args, do: name
         {:ok, {body, arg_names}}
     end
   end
 
-  defp unwrap_function(_, _, _) do
-    {:error, "Expected a module with function definition"}
+  defp unwrap_function(_, _, _), do: {:error, "Expected a module with function definition"}
+
+  defp module_loaded?(module) when is_atom(module) do
+    case :code.is_loaded(module) do
+      {:file, _} -> true
+      _ -> false
+    end
   end
 end
