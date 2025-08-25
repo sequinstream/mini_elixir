@@ -244,5 +244,44 @@ defmodule MiniElixirTest do
       assert {:error, message} = MiniElixir.eval(code, ImmediateExecution, :safe_function, [1])
       assert message =~ "Immediate code execution in modules is not allowed"
     end
+
+    test "prevents atom exhaustion attacks" do
+      # Generate a large amount of code that would create many atoms
+      code = for i <- 1..2000, into: "", do: "foo#{i}()\n"
+
+      # This should now be blocked by our safety validation
+      assert {:error, message} = MiniElixir.eval(code, Foo, :bar, [])
+      assert message =~ "Potential atom exhaustion attack detected"
+    end
+
+    test "supports zero-arity functions" do
+      code = """
+      defmodule ZeroArityTest do
+        def bar do
+          2137
+        end
+      end
+      """
+
+      assert {:ok, 2137} = MiniElixir.eval(code, ZeroArityTest, :bar, [])
+    end
+
+    test "prevents MiniElixir module rewrite attacks" do
+      code = """
+      defmodule RewriteTest do
+        defmodule :"Elixir.MiniElixir" do
+          def eval(_, _, _, _), do: :pwnd
+        end
+
+        def bar(a) do
+          a
+        end
+      end
+      """
+
+      # This attack is now blocked by nested module validation
+      assert {:error, message} = MiniElixir.eval(code, RewriteTest, :bar, [2137])
+      assert message =~ "Nested modules are not allowed"
+    end
   end
 end

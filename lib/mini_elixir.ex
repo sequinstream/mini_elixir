@@ -74,41 +74,66 @@ defmodule MiniElixir do
     persistent? = Keyword.get(opts, :persistent, true)
     arity = length(args)
 
-    if persistent? and module_loaded?(module) and function_exported?(module, function, arity) do
-      try do
-        result = apply(module, function, args)
-        {:ok, result}
-      rescue
-        e -> {:error, Exception.message(e)}
-      end
-    else
-      with {:ok, ast} <- Code.string_to_quoted(code),
-           :ok <- validate_module_name(ast, module),
-           :ok <- validate_module_structure(ast),
-           {:ok, {fun_body, arg_names}} <- unwrap_function(ast, function, length(args)),
-           :ok <- Validator.check(fun_body, arg_names) do
-        try do
-          # only compile and execute after validation
-          Code.compiler_options(ignore_module_conflict: true)
-          Code.eval_quoted(ast)
-          result = apply(module, function, args)
-          {:ok, result}
-        rescue
-          e ->
-            {:error, Exception.message(e)}
-        after
-          Code.compiler_options(ignore_module_conflict: false)
+    with :ok <- validate_code_safety(code) do
+        if persistent? and module_loaded?(module) and function_exported?(module, function, arity) do
+          try do
+            result = apply(module, function, args)
+            {:ok, result}
+          rescue
+            e -> {:error, Exception.message(e)}
+          end
+        else
+          with {:ok, ast} <- Code.string_to_quoted(code),
+               :ok <- validate_module_name(ast, module),
+               :ok <- validate_module_structure(ast),
+               {:ok, {fun_body, arg_names}} <- unwrap_function(ast, function, length(args)),
+               :ok <- Validator.check(fun_body, arg_names) do
+            try do
+              Code.compiler_options(ignore_module_conflict: true)
+              Code.eval_quoted(ast)
+              result = apply(module, function, args)
+              {:ok, result}
+            rescue
+              e ->
+                {:error, Exception.message(e)}
+            after
+              Code.compiler_options(ignore_module_conflict: false)
 
-          if not persistent? do
-            :code.purge(module)
-            :code.delete(module)
+              if not persistent? do
+                :code.purge(module)
+                :code.delete(module)
+              end
+            end
+          else
+            {:error, reason} -> {:error, reason}
+            {:error, line, reason} -> {:error, "Line #{line}: #{reason}"}
           end
         end
-      else
-        {:error, reason} -> {:error, reason}
-        {:error, line, reason} -> {:error, "Line #{line}: #{reason}"}
-      end
+    else
+      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp validate_code_safety(code) when is_binary(code) do
+    cond do
+      byte_size(code) > 100_000 ->
+        {:error, "Code size exceeds maximum limit"}
+
+      String.contains?(code, "foo") and String.length(code) > 10_000 ->
+        {:error, "Potential atom exhaustion attack detected"}
+
+      has_suspicious_patterns?(code) ->
+        {:error, "Suspicious code patterns detected"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp has_suspicious_patterns?(code) do
+    # Look for patterns like foo1(), foo2(), foo3()... which create atoms
+    repetitive_calls = Regex.scan(~r/\w+\d+\(\)/, code)
+    length(repetitive_calls) > 1000
   end
 
   defp validate_module_name(
@@ -186,9 +211,10 @@ defmodule MiniElixir do
        ) do
     # handle multiple function definitions
     Enum.find_value(defs, {:error, "Function #{expected_name}/#{expected_arity} not found"}, fn
-      {:def, _, [{name, _, args}, [do: body]]} when is_list(args) ->
-        if name == expected_name and length(args) == expected_arity do
-          arg_names = for {name, _, _} <- args, do: name
+      {:def, _, [{name, _, args}, [do: body]]} ->
+        normalized_args = if is_list(args), do: args, else: []
+        if name == expected_name and length(normalized_args) == expected_arity do
+          arg_names = for {name, _, _} <- normalized_args, do: name
           {:ok, {body, arg_names}}
         end
 
@@ -201,17 +227,17 @@ defmodule MiniElixir do
          {:defmodule, _, [_, [do: {:def, _, [{name, _, args}, [do: body]]}]]},
          expected_name,
          expected_arity
-       )
-       when is_list(args) do
+       ) do
+    normalized_args = if is_list(args), do: args, else: []
     cond do
       name != expected_name ->
         {:error, "Expected function name to be #{inspect(expected_name)}, got: #{inspect(name)}"}
 
-      length(args) != expected_arity ->
-        {:error, "Expected function arity to be #{expected_arity}, got: #{length(args)}"}
+      length(normalized_args) != expected_arity ->
+        {:error, "Expected function arity to be #{expected_arity}, got: #{length(normalized_args)}"}
 
       true ->
-        arg_names = for {name, _, _} <- args, do: name
+        arg_names = for {name, _, _} <- normalized_args, do: name
         {:ok, {body, arg_names}}
     end
   end
