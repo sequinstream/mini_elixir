@@ -174,5 +174,75 @@ defmodule MiniElixirTest do
 
       assert {:error, _} = MiniElixir.eval(code, Converter, :to_atom, ["dangerous"])
     end
+
+    test "handles nested modules that override built-in modules" do
+      code = ~S"""
+      defmodule NameFormatterNested do
+        defmodule String do
+          def capitalize(a) do
+            Code.eval_string(a, [])
+          end
+        end
+
+        def format_name(first) do
+          String.capitalize(first)
+        end
+      end
+      """
+
+      # Now this should be properly rejected due to nested module validation
+      assert {:error, message} = MiniElixir.eval(code, NameFormatterNested, :format_name, ["john"])
+      assert message =~ "Nested modules are not allowed"
+    end
+
+    test "handles module aliases" do
+      code = ~S"""
+      defmodule NameFormatterAlias do
+        alias String, as: MyString
+
+        def format_name(first) do
+          MyString.capitalize(first)
+        end
+      end
+      """
+
+      # Now this should be properly rejected due to alias validation
+      assert {:error, message} = MiniElixir.eval(code, NameFormatterAlias, :format_name, ["john"])
+      assert message =~ "Module aliases are not allowed"
+    end
+
+    test "handles modules with immediate execution" do
+      code = ~S"""
+      defmodule NameFormatterIO do
+        defmodule MyMod do
+          IO.inspect("modules are tricky")
+        end
+
+        def format_name(first) do
+          String.capitalize(first)
+        end
+      end
+      """
+
+      # Now this should be properly rejected due to nested module validation
+      assert {:error, message} = MiniElixir.eval(code, NameFormatterIO, :format_name, ["john"])
+      assert message =~ "Nested modules are not allowed"
+    end
+
+    test "prevents immediate code execution in modules" do
+      code = ~S"""
+      defmodule ImmediateExecution do
+        IO.puts("This should not execute!")
+
+        def safe_function(x) do
+          x + 1
+        end
+      end
+      """
+
+      # This should be rejected due to immediate execution validation
+      assert {:error, message} = MiniElixir.eval(code, ImmediateExecution, :safe_function, [1])
+      assert message =~ "Immediate code execution in modules is not allowed"
+    end
   end
 end

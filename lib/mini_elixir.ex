@@ -84,6 +84,7 @@ defmodule MiniElixir do
     else
       with {:ok, ast} <- Code.string_to_quoted(code),
            :ok <- validate_module_name(ast, module),
+           :ok <- validate_module_structure(ast),
            {:ok, {fun_body, arg_names}} <- unwrap_function(ast, function, length(args)),
            :ok <- Validator.check(fun_body, arg_names) do
         try do
@@ -125,6 +126,57 @@ defmodule MiniElixir do
 
   defp validate_module_name(_, _) do
     {:error, "Expected a module definition"}
+  end
+
+  defp validate_module_structure({:defmodule, _, [_, [do: body]]}) do
+    validate_module_body(body)
+  end
+
+  defp validate_module_structure(_) do
+    {:error, "Expected a module definition"}
+  end
+
+  defp validate_module_body({:__block__, _, statements}) when is_list(statements) do
+    Enum.reduce_while(statements, :ok, fn statement, :ok ->
+      case validate_statement(statement) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_module_body(single_statement) do
+    validate_statement(single_statement)
+  end
+
+  defp validate_statement({:def, _, _}), do: :ok
+  defp validate_statement({:defp, _, _}), do: :ok
+
+  defp validate_statement({:defmodule, _, _}) do
+    {:error, "Nested modules are not allowed"}
+  end
+
+  defp validate_statement({:alias, _, _}) do
+    {:error, "Module aliases are not allowed"}
+  end
+
+  defp validate_statement({:import, _, _}) do
+    {:error, "Module imports are not allowed"}
+  end
+
+  defp validate_statement({:require, _, _}) do
+    {:error, "Module requires are not allowed"}
+  end
+
+  defp validate_statement({:use, _, _}) do
+    {:error, "Module use is not allowed"}
+  end
+
+  defp validate_statement(expr) do
+    case expr do
+      {:@, _, _} -> :ok
+      _ -> {:error, "Immediate code execution in modules is not allowed"}
+    end
   end
 
   defp unwrap_function(
